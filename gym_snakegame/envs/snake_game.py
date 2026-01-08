@@ -33,7 +33,7 @@ class SnakeGameEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(self.n_channel, 8),
+            shape=(self.n_channel, 16),
             dtype=np.float32,
         )
         self.action_space = spaces.Discrete(4)
@@ -85,79 +85,96 @@ class SnakeGameEnv(gym.Env):
                 self.board[new_target[0], new_target[1]] = self.ITEM
 
     def _get_obs(self):
-        if self.n_channel == 1:
-            # return self.board[np.newaxis, :, :]
-            # return self.board.flatten() / (self.board_size**2)
-            
-            board = self.board
-            size = self.board_size
-        
-            head_pos = np.argwhere(board == self.HEAD)[0]
-            food_pos = np.argwhere(board == self.ITEM)[0]
-        
-            hx, hy = head_pos
-            fx, fy = food_pos
-        
-            head_x = hx / (size - 1)
-            head_y = hy / (size - 1)
-        
-            food_dx = (fx - hx) / (size - 1)
-            food_dy = (fy - hy) / (size - 1)
-        
-            def distance_to_danger(dx, dy):
-                x, y = hx, hy
-                dist = 0
-        
-                while True:
-                    nx, ny = x + dx, y + dy
-        
-                    if not (0 <= nx < size and 0 <= ny < size):
-                        break
-        
-                    if board[nx, ny] != self.BLANK and board[nx, ny] != self.ITEM:
-                        break
-        
-                    dist += 1
-                    x, y = nx, ny
-        
-                return dist / (size - 1)
-        
-            dist_up    = distance_to_danger(-1,  0)
-            dist_down  = distance_to_danger( 1,  0)
-            dist_left  = distance_to_danger( 0, -1)
-            dist_right = distance_to_danger( 0,  1)
-        
-            return np.array([
-                head_x, head_y,
-                food_dx, food_dy,
-                dist_up, dist_down, dist_left, dist_right
-            ], dtype=np.float32)
+      board = self.board
+      size = self.board_size
+      head = self.snake[-1]
+      tail = self.snake[0]
+      
+      # 1. Normalized Head Position (2 values)
+      head_x = head[0] / (size - 1)
+      head_y = head[1] / (size - 1)
 
-        else:
-            return self._split_channel(self.n_channel)
+      # 2. Normalized Food Direction (2 values)
+      food_pos = np.argwhere(board == self.ITEM)
+      if len(food_pos) > 0:
+          fx, fy = food_pos[0]
+          food_dx = (fx - head[0]) / (size - 1)
+          food_dy = (fy - head[1]) / (size - 1)
+      else:
+          food_dx, food_dy = 0.0, 0.0
 
-    def _split_channel(self, n_channel):
-        if n_channel == 2:
-            mask = self.board == self.ITEM
-            snake_obs = np.where(mask, 0, self.board)
-            target_obs = np.where(mask, self.board, 0)
-            return np.array([snake_obs, target_obs])
-        # n_channel == 4
-        else:
-            channels = []
-            # body
-            mask = (1 < self.board) & (self.board < len(self.snake))
-            channel = np.where(mask, self.board, 0)
-            channels.append(channel)
+      # 3. Distances to Danger (4 values)
+      # Checks how many tiles are clear in each direction (Wall or Body)
+      def distance_to_danger(dx, dy):
+          x, y = head
+          dist = 0
+          while True:
+              nx, ny = x + dx, y + dy
+              if not (0 <= nx < size and 0 <= ny < size): break # Wall
+              if 0 < board[nx, ny] < self.ITEM: break           # Body
+              dist += 1
+              x, y = nx, ny
+          return dist / (size - 1)
 
-            # head, tail, target
-            without_body = (1, len(self.snake), self.ITEM)
-            for element in without_body:
-                mask = self.board == element
-                channel = np.where(mask, self.board, 0)
-                channels.append(channel)
+      dist_up    = distance_to_danger(-1,  0)
+      dist_down  = distance_to_danger( 1,  0)
+      dist_left  = distance_to_danger( 0, -1)
+      dist_right = distance_to_danger( 0,  1)
 
-            return np.array(channels)
+      # 4. Immediate Surroundings (4 values)
+      # Boolean 1/0 if the adjacent tile is death. Helps the "Neck" constraint.
+      def is_unsafe(nx, ny):
+          if not (0 <= nx < size and 0 <= ny < size): return 1.0
+          if 0 < board[nx, ny] < self.ITEM: return 1.0
+          return 0.0
+
+      surr_up    = is_unsafe(head[0]-1, head[1])
+      surr_down  = is_unsafe(head[0]+1, head[1])
+      surr_left  = is_unsafe(head[0],   head[1]-1)
+      surr_right = is_unsafe(head[0],   head[1]+1)
+
+      # 5. Tail Direction (2 values)
+      # Crucial for long snakes: the tail is the only guaranteed "opening"
+      tail_dx = (tail[0] - head[0]) / (size - 1)
+      tail_dy = (tail[1] - head[1]) / (size - 1)
+
+      # 6. Movement Direction (2 values)
+      # Encode which way the snake is currently facing (prev_action)
+      # Use the direction vector corresponding to self.prev_action
+      curr_dir = self._action_to_direction[self.prev_action]
+      dir_x, dir_y = curr_dir[0], curr_dir[1]
+
+      return np.array([
+          head_x, head_y,      # 0, 1
+          food_dx, food_dy,    # 2, 3
+          dist_up, dist_down, dist_left, dist_right, # 4, 5, 6, 7
+          surr_up, surr_down, surr_left, surr_right, # 8, 9, 10, 11
+          tail_dx, tail_dy,    # 12, 13
+          dir_x, dir_y         # 14, 15
+      ], dtype=np.float32)
+
+      def _split_channel(self, n_channel):
+          if n_channel == 2:
+              mask = self.board == self.ITEM
+              snake_obs = np.where(mask, 0, self.board)
+              target_obs = np.where(mask, self.board, 0)
+              return np.array([snake_obs, target_obs])
+          # n_channel == 4
+          else:
+              channels = []
+              # body
+              mask = (1 < self.board) & (self.board < len(self.snake))
+              channel = np.where(mask, self.board, 0)
+              channels.append(channel)
+
+              # head, tail, target
+              without_body = (1, len(self.snake), self.ITEM)
+              for element in without_body:
+                  mask = self.board == element
+                  channel = np.where(mask, self.board, 0)
+                  channels.append(channel)
+
+              return np.array(channels)
 
     def _get_info(self):
         return {"snake_length": len(self.snake), "prev_action": self.prev_action}
