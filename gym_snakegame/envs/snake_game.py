@@ -31,11 +31,19 @@ class SnakeGameEnv(gym.Env):
         self.n_target = n_target
         # space
         self.observation_space = spaces.Box(
+            low=0,
+            high=self.ITEM,
+            shape=(self.n_channel, board_size, board_size),
+            dtype=np.uint32,
+        )
+        """
+        self.observation_space = spaces.Box(
             low=-1.0,
             high=1.0,
             shape=(self.n_channel, 16),
             dtype=np.float32,
         )
+        """
         self.action_space = spaces.Discrete(4)
         self._action_to_direction = np.array([[1, 0], [0, 1], [-1, 0], [0, -1]])
         # initialzie
@@ -84,6 +92,13 @@ class SnakeGameEnv(gym.Env):
                 new_target = target_candidate[self.np_random.choice(len(target_candidate))]
                 self.board[new_target[0], new_target[1]] = self.ITEM
 
+    def _get_obs(self):
+        if self.n_channel == 1:
+            return self.board[np.newaxis, :, :]
+        else:
+            return self._split_channel(self.n_channel)
+            
+    """
     def _get_obs(self):
       board = self.board
       size = self.board_size
@@ -152,29 +167,29 @@ class SnakeGameEnv(gym.Env):
           tail_dx, tail_dy,    # 12, 13
           dir_x, dir_y         # 14, 15
       ], dtype=np.float32)
-
-      def _split_channel(self, n_channel):
-          if n_channel == 2:
-              mask = self.board == self.ITEM
-              snake_obs = np.where(mask, 0, self.board)
-              target_obs = np.where(mask, self.board, 0)
-              return np.array([snake_obs, target_obs])
-          # n_channel == 4
-          else:
-              channels = []
-              # body
-              mask = (1 < self.board) & (self.board < len(self.snake))
+    """
+    def _split_channel(self, n_channel):
+      if n_channel == 2:
+          mask = self.board == self.ITEM
+          snake_obs = np.where(mask, 0, self.board)
+          target_obs = np.where(mask, self.board, 0)
+          return np.array([snake_obs, target_obs])
+      # n_channel == 4
+      else:
+          channels = []
+          # body
+          mask = (1 < self.board) & (self.board < len(self.snake))
+          channel = np.where(mask, self.board, 0)
+          channels.append(channel)
+    
+          # head, tail, target
+          without_body = (1, len(self.snake), self.ITEM)
+          for element in without_body:
+              mask = self.board == element
               channel = np.where(mask, self.board, 0)
               channels.append(channel)
-
-              # head, tail, target
-              without_body = (1, len(self.snake), self.ITEM)
-              for element in without_body:
-                  mask = self.board == element
-                  channel = np.where(mask, self.board, 0)
-                  channels.append(channel)
-
-              return np.array(channels)
+    
+          return np.array(channels)
 
     def _get_info(self):
         return {"snake_length": len(self.snake), "prev_action": self.prev_action}
