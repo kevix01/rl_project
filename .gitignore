@@ -1,0 +1,4 @@
+.ipynb_checkpoints/
+.virtual_documents/
+./gym_snakegame/__pycache__/
+./gym_snakegame/envs/__pycache__/
