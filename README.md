@@ -1,2 +1,2 @@
 # rl_project
-University project for Reinforcment Learning
+University project for Reinforcement Learning
